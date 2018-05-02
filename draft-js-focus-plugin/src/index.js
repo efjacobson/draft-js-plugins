@@ -1,4 +1,5 @@
-import { EditorState } from 'draft-js';
+import { EditorState, SelectionState } from 'draft-js';
+import DraftOffsetKey from 'draft-js/lib/DraftOffsetKey';
 import insertNewLine from './modifiers/insertNewLine';
 import setSelection from './modifiers/setSelection';
 import setSelectionToBlock from './modifiers/setSelectionToBlock';
@@ -46,8 +47,7 @@ export default (config = {}) => {
 
       // if the selection didn't change there is no need to re-render
       const selection = editorState.getSelection();
-      if (lastSelection && selection.equals(lastSelection)) {
-        lastSelection = editorState.getSelection();
+      if (selection.equals(lastSelection)) {
         return editorState;
       }
 
@@ -69,6 +69,43 @@ export default (config = {}) => {
         // By forcing the selection the editor will trigger the blockRendererFn which is
         // necessary for the blockProps containing isFocus to be passed down again.
         return EditorState.forceSelection(editorState, editorState.getSelection());
+      }
+
+      let focusableBlockKey;
+      if (lastSelection) {
+        const lastAnchorKey = lastSelection.getAnchorKey();
+        const anchorKey = selection.getAnchorKey();
+        if (lastAnchorKey !== anchorKey) { // selection moved from one block to another
+          const lastBlockIndex = editorState.getCurrentContent().getBlocksAsArray().indexOf(editorState.getCurrentContent().getBlockForKey(lastAnchorKey));
+          const blockIndex = editorState.getCurrentContent().getBlocksAsArray().indexOf(editorState.getCurrentContent().getBlockForKey(anchorKey));
+          if (lastBlockIndex > blockIndex) { // direction: up
+            focusableBlockKey = contentState.getKeyBefore(lastAnchorKey);
+          } else { // direction: down
+            focusableBlockKey = contentState.getKeyAfter(lastAnchorKey);
+          }
+        }
+      }
+
+      if (blockKeyStore.includes(focusableBlockKey)) {
+        const offsetKey = DraftOffsetKey.encode(focusableBlockKey, 0, 0);
+        const node = document.querySelectorAll(`[data-offset-key="${offsetKey}"]`)[0];
+        // set the native selection to the node so the caret is not in the text and
+        // the selectionState matches the native selection
+        const windowSelection = window.getSelection();
+        const range = document.createRange();
+        range.setStart(node, 0);
+        range.setEnd(node, 0);
+        windowSelection.removeAllRanges();
+        windowSelection.addRange(range);
+
+        lastSelection = selection;
+        return EditorState.forceSelection(editorState, new SelectionState({
+          anchorKey: focusableBlockKey,
+          anchorOffset: 0,
+          focusKey: focusableBlockKey,
+          focusOffset: 0,
+          isBackward: false,
+        }));
       }
 
       return editorState;
@@ -158,12 +195,14 @@ export default (config = {}) => {
         return;
       }
 
-      // Covering the case to select the after block with arrow down
-      const selectionKey = editorState.getSelection().getAnchorKey();
-      const afterBlock = editorState.getCurrentContent().getBlockAfter(selectionKey);
-      if (afterBlock && blockKeyStore.includes(afterBlock.getKey())) {
-        setSelection(getEditorState, setEditorState, 'down', event);
+      if (editorState.getSelection().equals(lastSelection)) {
+        const blockBefore = editorState.getCurrentContent().getBlockAfter(lastSelection.getAnchorKey());
+        if (blockBefore && blockKeyStore.includes(blockBefore.getKey())) {
+          setSelection(getEditorState, setEditorState, 'down', event);
+        }
       }
+
+      lastSelection = editorState.getSelection();
     },
     onUpArrow: (event, { getEditorState, setEditorState }) => {
       // TODO edgecase: if one block is selected and the user wants to expand the selection using the shift key
@@ -179,12 +218,14 @@ export default (config = {}) => {
         return;
       }
 
-      // Covering the case to select the before block with arrow up
-      const selectionKey = editorState.getSelection().getAnchorKey();
-      const beforeBlock = editorState.getCurrentContent().getBlockBefore(selectionKey);
-      if (beforeBlock && blockKeyStore.includes(beforeBlock.getKey())) {
-        setSelection(getEditorState, setEditorState, 'up', event);
+      if (editorState.getSelection().equals(lastSelection)) {
+        const blockBefore = editorState.getCurrentContent().getBlockBefore(lastSelection.getAnchorKey());
+        if (blockBefore && blockKeyStore.includes(blockBefore.getKey())) {
+          setSelection(getEditorState, setEditorState, 'up', event);
+        }
       }
+
+      lastSelection = editorState.getSelection();
     },
     decorator: createDecorator({ theme, blockKeyStore }),
   };
